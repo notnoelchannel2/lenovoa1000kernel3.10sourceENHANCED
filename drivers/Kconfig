@@ -87,6 +87,7 @@ source "drivers/regulator/Kconfig"
 source "drivers/media/Kconfig"
 
 source "drivers/video/Kconfig"
+source "drivers/gpu/mali400/Kconfig"
 
 source "sound/Kconfig"
 
