@@ -19,6 +19,13 @@ config ANDROID_BINDER_IPC
 	  Android process, using Binder to identify, invoke and pass arguments
 	  between said processes.
 
+config ANDROID_BINDER_DEVICES
+	string "Android Binder devices"
+	depends on ANDROID_BINDER_IPC
+	default "binder,hwbinder,vndbinder"
+	---help---
+	  Default value for the binder.devices parameter.
+
 config ANDROID_BINDER_IPC_32BIT
 	bool
         default y

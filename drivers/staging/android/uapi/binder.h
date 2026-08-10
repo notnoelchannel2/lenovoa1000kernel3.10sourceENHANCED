@@ -32,6 +32,8 @@ enum {
 	BINDER_TYPE_HANDLE	= B_PACK_CHARS('s', 'h', '*', B_TYPE_LARGE),
 	BINDER_TYPE_WEAK_HANDLE	= B_PACK_CHARS('w', 'h', '*', B_TYPE_LARGE),
 	BINDER_TYPE_FD		= B_PACK_CHARS('f', 'd', '*', B_TYPE_LARGE),
+	BINDER_TYPE_FDA		= B_PACK_CHARS('f', 'd', 'a', B_TYPE_LARGE),
+	BINDER_TYPE_PTR		= B_PACK_CHARS('p', 't', '*', B_TYPE_LARGE),
 };
 
 enum {
@@ -62,6 +64,41 @@ typedef __u64 binder_uintptr_t;
  * driver takes care of re-writing the structure type and data as it moves
  * between processes.
  */
+struct binder_object_header {
+	__u32		type;
+};
+
+struct binder_fd_object {
+	struct binder_object_header	hdr;
+	__u32				pad_flags;
+	union {
+		binder_uintptr_t	pad_binder;
+		__u32			fd;
+	};
+	binder_uintptr_t		cookie;
+};
+
+struct binder_buffer_object {
+	struct binder_object_header	hdr;
+	__u32				flags;
+	binder_uintptr_t		buffer;
+	binder_size_t			length;
+	binder_size_t			parent;
+	binder_size_t			parent_offset;
+};
+
+enum {
+	BINDER_BUFFER_FLAG_HAS_PARENT = 0x01,
+};
+
+struct binder_fd_array_object {
+	struct binder_object_header	hdr;
+	__u32				pad;
+	binder_size_t			num_fds;
+	binder_size_t			parent;
+	binder_size_t			parent_offset;
+};
+
 struct flat_binder_object {
 	/* 8 bytes for large_flat_header. */
 	__u32	type;
@@ -165,6 +202,11 @@ struct binder_transaction_data {
 		} ptr;
 		__u8	buf[8];
 	} data;
+};
+
+struct binder_transaction_data_sg {
+	struct binder_transaction_data transaction_data;
+	binder_size_t buffers_size;
 };
 
 struct binder_ptr_cookie {
@@ -279,6 +321,8 @@ enum binder_driver_return_protocol {
 enum binder_driver_command_protocol {
 	BC_TRANSACTION = _IOW('c', 0, struct binder_transaction_data),
 	BC_REPLY = _IOW('c', 1, struct binder_transaction_data),
+	BC_TRANSACTION_SG = _IOW('c', 17, struct binder_transaction_data_sg),
+	BC_REPLY_SG = _IOW('c', 18, struct binder_transaction_data_sg),
 	/*
 	 * binder_transaction_data: the sent command.
 	 */
