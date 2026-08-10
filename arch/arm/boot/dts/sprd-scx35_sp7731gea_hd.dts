@@ -21,7 +21,9 @@
 /memreserve/ 0x9F82D000 0x4B1000; /* 480*854*4*3, 4K alignment, for display size*/
 
 /* memory reserved for ION */
-/memreserve/ 0x9FCDE000 0x322000; /* 480*854*4*2, 8K alignment, for display size*/
+/memreserve/ 0x9FCDE000 0x1000000; /* A1000: 16M, было 0x322000 (только 2 кадра) -
+   композитору нужно 3 FB + 2 буфера OverlayComposer, иначе выделение уходит в
+   несмежный system-heap и DISPC сканирует чужую память за 0xA0000000 */
 
 /include/ "skeleton.dtsi"
 /include/ "scx30g-clocks.dtsi"
@@ -317,8 +319,8 @@
                  compatible = "sprd,sprd_vsp";
                  reg = <0x60900000 0xc000>;
                  interrupts = <0 43 0x0>;
-                 clock-names = "clk_mm_i","clk_vsp", "clk_mm_axi";
-                 clocks = <&clk_mm>, <&clk_vsp>, <&clk_mm_axi>;
+                 clock-names = "clk_mm_i","clk_vsp";
+                 clocks = <&clk_mm>, <&clk_vsp>;
          };
         sprd_jpg {
                  compatible = "sprd,sprd_jpg";
@@ -350,18 +352,6 @@
 		 reg = <0x70600000 0x1000>;
 		 #address-cells = <1>;
 		 #size-cells = <0>;
-		focaltech_ts@38{
-			compatible = "focaltech,focaltech_ts";
-			reg = <0x38>;
-			gpios = <&d_gpio_gpio 81 0
-				&d_gpio_gpio 82 0>;
-			vdd_name = "vdd28";
-			virtualkeys = <130 1360 80 60
-                                   373 1360 80 60
-                                   630 1360 80 60>;
-			TP_MAX_X = <480>;
-			TP_MAX_Y = <854>;
-		};
 	 };
 	 i2c2: i2c@70700000{
 		 compatible  = "sprd,i2c";
@@ -369,24 +359,6 @@
 		 reg = <0x70700000 0x1000>;
 		 #address-cells = <1>;
 		 #size-cells = <0>;
-		lis3dh_acc@18{
-			compatible = "ST,lis3dh_acc";
-			reg = <0x18>;
-			poll_interval = <10>;
-			min_interval = <10>;
-			g_range = <0>;
-			axis_map_x = <1>;
-			axis_map_y = <0>;
-			axis_map_z = <2>;
-			negate_x = <0>;
-			negate_y = <1>;
-			negate_z = <0>;
-		};
-		ltr_558als@23{
-			compatible = "LITEON,ltr_558als";
-			reg = <0x23>;
-			gpios = <&d_gpio_gpio 216 0>;
-		};
 	 };
 	 i2c3: i2c@70800000{
 		 compatible  = "sprd,i2c";
@@ -440,7 +412,7 @@
 		dpi_clk_div = <7>;
 		sprd,fb_use_reservemem;
 		sprd,fb_mem = <0x9F82D000 0x4B1000>;
-		sprd,fb_display_size = <480 854>;
+		sprd,fb_display_size = <480 800>;
 	};
 	gsp:gsp@20a00000 {
 		compatible = "sprd,gsp";
@@ -757,7 +729,7 @@
 	sprd_cpu_cooling{
 		compatible = "sprd,sprd-cpu-cooling";
 		id = <0>;
-		max_freq = <1300000 1200000 1000000 768000>;
+		max_freq = <1200000 1200000 1000000 768000>;
 		max_core = <4 4 4 1>;
 		state_num = <4>;
 	};
@@ -844,7 +816,7 @@
                        reg = <3>;                      /* OVERLAY */
                        reg-names = "ion_heap_carveout_overlay";
                        sprd,ion-heap-type = <2>;       /* CARVEOUT */
-                       sprd,ion-heap-mem = <0x9FCDE000 0x322000>;/* 480*854*4*2, 8K alignment, for display size*/
+                       sprd,ion-heap-mem = <0x9FCDE000 0x1000000>;/* A1000: 16M (было 0x322000 = 2 кадра) */
                  };
          };
          sprd_iommu0:sprd_iommu@21400000 {
@@ -865,8 +837,8 @@
                        <0x60f00000 0x20000>,     //pgt
                        <0x60f20000 0x2000>;      //ctrl_reg
                  reg_name = "iova","pgt","ctrl_reg";
-                 clock-names = "clk_mmu","clk_mm_i","clk_mm_axi";
-                 clocks = <&clk_mmu>,<&clk_mm>,<&clk_mm_axi>;
+                 clock-names = "clk_mmu","clk_mm_i";
+                 clocks = <&clk_mmu>,<&clk_mm>;
                  status = "ok";
          };
 

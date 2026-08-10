@@ -350,6 +350,38 @@ static const char *sprd_boards_compat[] __initdata = {
 };
 extern struct smp_operations sprd_smp_ops;
 
+#ifdef CONFIG_PSTORE_RAM
+/* A1000: журнал ядра в ОЗУ. Область та же, что резервирует sci_reserve
+ * (SPRD_RAM_CONSOLE_START). Переживает перезагрузку, читается после старта
+ * рабочего ядра через /sys/fs/pstore. */
+#include <linux/pstore_ram.h>
+
+static struct ramoops_platform_data a1000_ramoops_data = {
+	.mem_size	= SPRD_RAM_CONSOLE_SIZE,
+	.mem_address	= SPRD_RAM_CONSOLE_START,
+	.record_size	= 0x8000,
+	.console_size	= 0x10000,
+	.dump_oops	= 1,
+};
+
+static struct platform_device a1000_ramoops_device = {
+	.name = "ramoops",
+	.dev = {
+		.platform_data = &a1000_ramoops_data,
+	},
+};
+
+static int __init a1000_ramoops_init(void)
+{
+	int ret = platform_device_register(&a1000_ramoops_device);
+
+	if (ret)
+		pr_err("A1000: не удалось зарегистрировать ramoops: %d\n", ret);
+	return ret;
+}
+device_initcall(a1000_ramoops_init);
+#endif
+
 MACHINE_START(SCPHONE, "sc8830")
 	.smp		= smp_ops(sprd_smp_ops),
 	.reserve	= sci_reserve,

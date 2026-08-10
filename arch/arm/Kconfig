@@ -1744,7 +1744,12 @@ config HZ
 		ARCH_S5PV210 || ARCH_EXYNOS4
 	default AT91_TIMER_HZ if ARCH_AT91
 	default SHMOBILE_TIMER_HZ if ARCH_SHMOBILE
-	default 100
+	# A1000: тик 300 вместо 100. На ARM частота задаётся здесь числом,
+	# а не выбором из kernel/Kconfig.hz, поэтому правка .config не
+	# держалась — oldconfig возвращал 100. При тике 10 мс пробуждения
+	# UI-потока и RenderThread округляются грубо: на наш кадр в 34 мс
+	# приходится всего три тика. 300 Гц даёт 3.3 мс и делится на 60.
+	default 300
 
 config SCHED_HRTICK
 	def_bool HIGH_RES_TIMERS
