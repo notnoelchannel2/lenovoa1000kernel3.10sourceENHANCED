@@ -118,7 +118,9 @@ static void _DrvPlatformLyrPSDoWork(struct work_struct *pWork)
 		v ^= 0x1 ;
 		msg2xxx_info->ps_state = v;
 		if (msg2xxx_info->suspend_state == 0) 
+#ifdef CONFIG_ENABLE_PROXIMITY_DETECTION
 			DrvPlatformLyrTpPsEnable(1);
+#endif
 
 		input_report_abs(msg2xxx_info->ps_input_dev, 
 					ABS_DISTANCE, msg2xxx_info->ps_state);

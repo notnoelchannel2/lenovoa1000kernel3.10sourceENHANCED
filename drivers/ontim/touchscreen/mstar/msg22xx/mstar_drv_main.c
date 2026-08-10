@@ -941,7 +941,9 @@ static ssize_t msg2xxx_ps_onoff_store(struct device *dev,
         msg2xxx_info->ps_onoff=0;
 		wake_unlock(&msg2xxx_info->wlock);
 		cancel_delayed_work(&msg2xxx_info->ps_work);
+#ifdef CONFIG_ENABLE_PROXIMITY_DETECTION
         DrvPlatformLyrTpPsEnable(0);
+#endif
         if (msg2xxx_info->suspend_state == 1)
         {
             printk("[kernel][%s]: [FTS]msg2xxx suspend [1]\n",__func__);
