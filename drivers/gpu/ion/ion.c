@@ -513,16 +513,42 @@ struct ion_handle *ion_alloc(struct ion_client *client, size_t len,
 
 	len = PAGE_ALIGN(len);
 
-	down_read(&dev->lock);
-	plist_for_each_entry(heap, &dev->heaps, node) {
-		/* if the caller didn't specify this heap id */
-		if (!((1 << heap->id) & heap_id_mask))
-			continue;
-		buffer = ion_buffer_create(heap, dev, len, align, flags);
-		if (!IS_ERR(buffer))
-			break;
+	/* A1000: display-sized allocation must be physically contiguous.
+	 * DISPC scans the OSD buffer linearly from one physical address, so a
+	 * system-heap buffer (scattered pages) only renders correctly up to the
+	 * first discontinuity -> horizontal garbage that worsens as memory
+	 * fragments. Heaps are walked in plist order (priority -heap->id), so
+	 * the system heap (id 1) beats the overlay carveout (id 3); force the
+	 * carveout first and fall back to the original mask if it is full.
+	 */
+	{
+		unsigned int a1000_orig_mask = heap_id_mask;
+		int a1000_fallback = 0;
+
+		if (len == 480 * 800 * 4) {
+			heap_id_mask = (1u << 3);   /* ion_heap_carveout_overlay */
+			a1000_fallback = 1;
+		}
+a1000_retry:
+		down_read(&dev->lock);
+		plist_for_each_entry(heap, &dev->heaps, node) {
+			/* if the caller didn't specify this heap id */
+			if (!((1 << heap->id) & heap_id_mask))
+				continue;
+			buffer = ion_buffer_create(heap, dev, len, align, flags);
+			if (!IS_ERR(buffer))
+				break;
+		}
+		up_read(&dev->lock);
+
+		if ((buffer == NULL || IS_ERR(buffer)) && a1000_fallback) {
+			pr_err("ion: A1000 overlay carveout full for %d, falling back\n", len);
+			a1000_fallback = 0;
+			heap_id_mask = a1000_orig_mask;
+			buffer = NULL;
+			goto a1000_retry;
+		}
 	}
-	up_read(&dev->lock);
 
 	if (buffer == NULL)
 	{

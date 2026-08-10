@@ -62,6 +62,7 @@
 #include <linux/ptrace.h>
 #include <linux/sched/rt.h>
 #include <linux/hugetlb.h>
+#include <linux/bootmem.h>
 #include <linux/freezer.h>
 
 #include <asm/futex.h>
@@ -153,7 +154,12 @@ struct futex_hash_bucket {
 	struct plist_head chain;
 };
 
-static struct futex_hash_bucket futex_queues[1<<FUTEX_HASHBITS];
+/* A1000: таблица futex по числу процессоров (бэкпорт a52b89eb из 3.14).
+ * Была одна фиксированная таблица на 256 корзин: при сотнях потоков ART они
+ * дерутся за spinlock одной корзины, даже ожидая разные futex'ы. Теперь размер
+ * считается от числа процессоров — на четырёх ядрах это 1024 корзины. */
+static struct futex_hash_bucket *futex_queues;
+static unsigned long futex_hashsize;
 
 /*
  * We hash on the keys returned from get_futex_key (see below).
@@ -163,7 +169,7 @@ static struct futex_hash_bucket *hash_futex(union futex_key *key)
 	u32 hash = jhash2((u32*)&key->both.word,
 			  (sizeof(key->both.word)+sizeof(key->both.ptr))/4,
 			  key->both.offset);
-	return &futex_queues[hash & ((1 << FUTEX_HASHBITS)-1)];
+	return &futex_queues[hash & (futex_hashsize - 1)];
 }
 
 /*
@@ -2891,7 +2897,20 @@ static int __init futex_init(void)
 
 	futex_detect_cmpxchg();
 
-	for (i = 0; i < ARRAY_SIZE(futex_queues); i++) {
+	/* A1000: размер таблицы — 256 корзин на процессор, но не меньше прежних
+	 * 256. alloc_large_system_hash сама подберёт порядок аллокации и выведет
+	 * итоговый размер в dmesg. */
+	futex_hashsize = roundup_pow_of_two(256 * num_possible_cpus());
+	if (futex_hashsize < (1 << FUTEX_HASHBITS))
+		futex_hashsize = (1 << FUTEX_HASHBITS);
+
+	futex_queues = alloc_large_system_hash("futex", sizeof(*futex_queues),
+					       futex_hashsize, 0,
+					       futex_hashsize < 256 ? HASH_SMALL : 0,
+					       NULL, NULL,
+					       futex_hashsize, futex_hashsize);
+
+	for (i = 0; i < futex_hashsize; i++) {
 		plist_head_init(&futex_queues[i].chain);
 		spin_lock_init(&futex_queues[i].lock);
 	}

@@ -1848,7 +1848,13 @@ SYSCALL_DEFINE4(epoll_ctl, int, epfd, int, op, int, fd,
 	 * b/c we want to make sure we are looking at a coherent view of
 	 * epoll network.
 	 */
-	if (op == EPOLL_CTL_ADD || op == EPOLL_CTL_DEL) {
+	/* A1000: на удалении глобальный мьютекс не нужен (как с 3.13).
+	 * Удаление защищено ep->mtx и не меняет топологию epoll-сети: список
+	 * проверки путей (tfile_check_list) наполняется только при добавлении.
+	 * А epmutex — точка сериализации сразу для всех процессов, тогда как
+	 * Looper, подсистема ввода и binder постоянно снимают дескрипторы с
+	 * наблюдения. Оставляем его там, где он по-прежнему обязателен. */
+	if (op == EPOLL_CTL_ADD) {
 		mutex_lock(&epmutex);
 		did_lock_epmutex = 1;
 	}
