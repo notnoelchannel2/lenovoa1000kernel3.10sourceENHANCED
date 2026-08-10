@@ -12,6 +12,7 @@
  */
 #define pr_fmt(fmt) "sprdfb: " fmt
 
+#include <linux/moduleparam.h>
 #include <linux/workqueue.h>
 #include <linux/spinlock.h>
 #include <linux/clk.h>
@@ -162,6 +163,20 @@ extern u8 sprdfb_esd_enable; //add by liuwei
 #endif
 
 #ifdef CONFIG_FB_LCD_OVERLAY_SUPPORT
+/* A1000 color sweep: -1 = keep original; else override (settable via cmdline sprdfb_dispc.osd_*) */
+static int osd_endian_ov = -1;
+/* A1000: по умолчанию 0, а не -1 («не вмешиваться»).
+ * При -1 до применения /system/etc/init/a1000_rbswitch.rc действует
+ * значение от блоба hwcomposer с перестановкой красного и синего,
+ * поэтому бут-анимация в первые секунды мерцала фиолетовым. */
+static int osd_rb_ov = 0;
+static int osd_fmt_ov = -1;
+static int osd_extra16 = -1;
+module_param(osd_endian_ov, int, 0644);
+module_param(osd_rb_ov, int, 0644);
+module_param(osd_fmt_ov, int, 0644);
+module_param(osd_extra16, int, 0644);
+
 static int overlay_start(struct sprdfb_device *dev, uint32_t layer_index);
 static int overlay_close(struct sprdfb_device *dev);
 #endif
@@ -296,6 +311,9 @@ void dispc_irq_trick(struct sprdfb_device *dev)
 extern void dsi_irq_trick(void);
 
 //static uint32_t underflow_ever_happened = 0;
+u32 sprdfb_underflow_cnt = 0;
+EXPORT_SYMBOL(sprdfb_underflow_cnt);
+
 static irqreturn_t dispc_isr(int irq, void *data)
 {
 	struct sprdfb_dispc_context *dispc_ctx = (struct sprdfb_dispc_context *)data;
@@ -313,6 +331,7 @@ static irqreturn_t dispc_isr(int irq, void *data)
 	//dispc_irq_trick_in(reg_val);
 
 	if(reg_val & DISPC_INT_ERR_MASK){
+		sprdfb_underflow_cnt++;
 		printk("sprdfb: Warning: dispc underflow (0x%x)!\n",reg_val);
 		//underflow_ever_happened++;
 		dispc_write(DISPC_INT_ERR_MASK, DISPC_INT_CLR);
@@ -648,7 +667,17 @@ static void dispc_run(struct sprdfb_device *dev)
 			dispc_sync(dev);
 #else
 #ifdef CONFIG_FB_LCD_OVERLAY_SUPPORT
-            if(SPRD_OVERLAY_STATUS_STARTED == dispc_ctx.overlay_state){
+            /* A1000: на DPI-панели ждать нечего.
+             * Здесь мы ждали завершения предыдущего кадра, и в оверлейном
+             * режиме это ожидание выходило в таймаут (dispc_sync time out),
+             * после чего новый адрес буфера не применялся — картинка
+             * застывала на старом кадре. DPI-контроллер сканирует экран
+             * непрерывно и подхватывает регистры сам по ближайшему vsync,
+             * а буферы в оверлейном режиме чередует блоб, так что ждать
+             * нечего. Для остальных интерфейсов (например, MCU/SPI, где кадр
+             * гонится вручную) ожидание оставляем как было. */
+            if((SPRD_OVERLAY_STATUS_STARTED == dispc_ctx.overlay_state) &&
+                    (SPRDFB_PANEL_IF_DPI != dev->panel_if_type)){
                 dispc_sync(dev);
             }
 #endif
@@ -1170,7 +1199,7 @@ static int32_t sprdfb_dispc_init(struct sprdfb_device *dev)
 	dispc_pwr_enable(true);
 #if defined( CONFIG_FB_SCX30G)
 	//set buf thres
-	dispc_set_threshold(0x960, 0x00, 0x960);//0x1000: 4K
+	dispc_set_threshold(0x960, 0x00, 0x960);//A1000: back to the stock watermark (0xE00 experiment suspected of causing stripes)
 #elif defined(CONFIG_FB_SCX35L)
 	dispc_set_threshold(0x1388, 0x00, 0x1388);//For sharkl, linebuffer size: 5K
 #endif
@@ -1621,8 +1650,8 @@ static int overlay_start(struct sprdfb_device *dev, uint32_t layer_index)
 	}
 */
 	dispc_set_bg_color(0x0);
-	dispc_clear_bits(BIT(2), DISPC_OSD_CTRL); /*use pixel alpha*/
-	dispc_set_osd_alpha(0x80);
+	dispc_set_bits(BIT(2), DISPC_OSD_CTRL); /*block alpha opaque - match fb path*/
+	dispc_set_osd_alpha(0xff);
 
 	if((layer_index & SPRD_LAYER_IMG) && (0 != dispc_read(DISPC_IMG_Y_BASE_ADDR))){
 		dispc_set_bits(BIT(0), DISPC_IMG_CTRL);/* enable the image layer */
@@ -1736,9 +1765,21 @@ static int overlay_osd_configure(struct sprdfb_device *dev, int type, overlay_re
 	/*lcdc_write((type << 3) , LCDC_IMG_CTRL);*/
 
 	/*use premultiply pixel alpha*/
-	reg_value = (y_endian<<8)|(type << 4|(1<<2))|(2<<16);
-	if(rb_switch){
-		reg_value |= (1 << 15);
+	{
+		int _e = (osd_endian_ov>=0)?osd_endian_ov:y_endian;
+		int _t = (osd_fmt_ov>=0)?osd_fmt_ov:type;
+		/* A1000: для 32-битного RGB перестановку не делаем.
+		 * Блоб (сборка под Android 5) присылает rb_switch = 1, компенсируя
+		 * порядок байт тогдашнего графического стека. В 8.1 буфер приходит
+		 * уже в нужном порядке, и эта компенсация меняет местами красный с
+		 * синим: бирюзовый логотип загрузки становился жёлтым, а обои,
+		 * побывав в оверлее, желтели до перезагрузки. Значение от блоба
+		 * игнорируем; osd_rb_ov по-прежнему перекрывает всё вручную. */
+		int _rb = (osd_rb_ov>=0) ? osd_rb_ov :
+				((SPRD_DATA_TYPE_RGB888 == type) ? 0 : (rb_switch?1:0));
+		reg_value = (_e<<8)|(_t<<4)|(1<<2);
+		if(osd_extra16>=0) reg_value |= (osd_extra16<<16);
+		if(_rb) reg_value |= (1<<15);
 	}
 	dispc_write(reg_value, DISPC_OSD_CTRL);
 
@@ -1918,6 +1959,17 @@ static int32_t sprdfb_dispc_display_overlay(struct sprdfb_device *dev, struct ov
 	sprdfb_panel_before_refresh(dev);
 
 	dispc_clear_bits(BIT(0), DISPC_OSD_CTRL);
+	/* A1000: keep the OSD layer enabled across FB-target frames.
+	 * In framebuffer-target mode the vendor HWC issues DISPLAY_OVERLAY *without*
+	 * a preceding SET_OVERLAY (SprdPrimaryPlane::display() sends exactly one
+	 * ioctl, 0x40046d02). Only SET_OVERLAY puts overlay_state back to ON, so the
+	 * BIT(0) we just cleared above would never be set again and the layer stays
+	 * dark: frames keep flowing but nothing is scanned out. Re-arm the state so
+	 * overlay_start() runs and re-enables the layer; it validates the base
+	 * address itself, so this cannot enable a layer that has none. */
+	if(SPRD_OVERLAY_STATUS_STARTED == dispc_ctx.overlay_state){
+		dispc_ctx.overlay_state = SPRD_OVERLAY_STATUS_ON;
+	}
 	if(SPRD_OVERLAY_STATUS_ON == dispc_ctx.overlay_state){
 		if(overlay_start(dev, setting->layer_index) != 0){
 			printk("sprdfb: %s[%d] overlay_start() err, return without run dispc!\n",__func__,__LINE__);

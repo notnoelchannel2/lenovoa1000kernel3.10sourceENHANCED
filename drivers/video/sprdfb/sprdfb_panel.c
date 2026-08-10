@@ -378,6 +378,7 @@ static struct panel_spec *adapt_panel_from_uboot(struct sprdfb_device *dev)
         if((lcd_adc_from_uboot>= cfg->lcd_voltage_min)&&(lcd_adc_from_uboot< cfg->lcd_voltage_max))
         {
             memcpy(lcd_name_from_uboot,cfg->lcd_name,strlen(cfg->lcd_name));
+            dev->lcd_name = cfg->lcd_name;
             printk(KERN_INFO "kernel: [%s]:** LCD Panel %s is attached!,lcd_adc_from_uboot=%d.\n", 
                    __FUNCTION__,cfg->lcd_name,lcd_adc_from_uboot);
             memcpy(&lcd_detect_mipi_info,cfg->panel,sizeof(struct panel_spec));
@@ -389,6 +390,7 @@ static struct panel_spec *adapt_panel_from_uboot(struct sprdfb_device *dev)
     printk(KERN_ERR "kernel: [%s]: Failed to match LCD,use default,lcd_name=%s,adc=%d\n", 
            __FUNCTION__,cfg->lcd_name,lcd_adc_from_uboot);
     memcpy(lcd_name_from_uboot,cfg->lcd_name,strlen(cfg->lcd_name));
+    dev->lcd_name = cfg->lcd_name;
     memcpy(&lcd_detect_mipi_info,cfg->panel,sizeof(struct panel_spec));
     return cfg->panel;
 }

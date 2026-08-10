@@ -21,6 +21,9 @@
 #include <linux/fb.h>
 #include "sprdfb.h"
 #include "sprdfb_panel.h"
+#include "sprdfb_dispc_reg.h"
+#include <linux/proc_fs.h>
+#include <linux/uaccess.h>
 
 
 struct attr_info {
@@ -76,7 +79,166 @@ static DEVICE_ATTR(dynamic_esd, S_IRUGO | S_IWUSR,
 		sysfs_rd_current_esd, sysfs_write_esd);
 #endif
 
+/*
+ * One-shot probe for the "picture repeats / tears" artefact. Everything below is scanout
+ * state, i.e. beneath SurfaceFlinger - screencap cannot see any of it. Reading this node
+ * also re-arms the DISPC error interrupt, which dispc_isr disarms after the first underflow,
+ * so consecutive reads answer "was there an underflow since the previous read".
+ */
+extern u32 sprdfb_underflow_cnt;
+
+static const struct { const char *name; u32 off; } dispc_probe_regs[] = {
+	{"CTRL",           DISPC_CTRL},
+	{"SIZE_XY",        DISPC_SIZE_XY},
+	{"BUF_THRES",      DISPC_BUF_THRES},
+	{"STS",            DISPC_STS},
+	{"BG_COLOR",       DISPC_BG_COLOR},
+	{"OSD_CTRL",       DISPC_OSD_CTRL},
+	{"OSD_BASE_ADDR",  DISPC_OSD_BASE_ADDR},
+	{"OSD_SIZE_XY",    DISPC_OSD_SIZE_XY},
+	{"OSD_PITCH",      DISPC_OSD_PITCH},
+	{"OSD_DISP_XY",    DISPC_OSD_DISP_XY},
+	{"OSD_ALPHA",      DISPC_OSD_ALPHA},
+	{"INT_EN",         DISPC_INT_EN},
+	{"INT_RAW",        DISPC_INT_RAW},
+	{"DPI_CTRL",       DISPC_DPI_CTRL},
+	{"DPI_H_TIMING",   DISPC_DPI_H_TIMING},
+	{"DPI_V_TIMING",   DISPC_DPI_V_TIMING},
+	{"DPI_STS0",       DISPC_DPI_STS0},
+	{"DPI_STS1",       DISPC_DPI_STS1},
+	{"SHDW_OSD_CTRL",  SHDW_OSD_CTRL},
+	{"SHDW_OSD_BASE",  SHDW_OSD_BASE_ADDR},
+	{"SHDW_OSD_SIZE",  SHDW_OSD_SIZE_XY},
+	{"SHDW_OSD_PITCH", SHDW_OSD_PITCH},
+	{"SHDW_DPI_H",     SHDW_DPI_H_TIMING},
+	{"SHDW_DPI_V",     SHDW_DPI_V_TIMING},
+};
+
+static ssize_t sysfs_rd_dispc_dump(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct fb_info *fb = dev_get_drvdata(dev);
+	struct sprdfb_device *fb_dev = fb ? fb->par : NULL;
+	int i, n = 0;
+
+	n += snprintf(buf + n, PAGE_SIZE - n, "panel: %s\n",
+		(fb_dev && fb_dev->lcd_name) ? fb_dev->lcd_name : "(unset)");
+	n += snprintf(buf + n, PAGE_SIZE - n, "underflow_cnt: %u\n", sprdfb_underflow_cnt);
+	for (i = 0; i < ARRAY_SIZE(dispc_probe_regs); i++)
+		n += snprintf(buf + n, PAGE_SIZE - n, "%-14s %08x\n",
+			dispc_probe_regs[i].name, dispc_read(dispc_probe_regs[i].off));
+
+	dispc_set_bits(DISPC_INT_ERR_MASK, DISPC_INT_EN);
+	return n;
+}
+
+static DEVICE_ATTR(dispc_dump, S_IRUGO, sysfs_rd_dispc_dump, NULL);
+
+static ssize_t sysfs_rd_osd_thumb(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	u32 base  = dispc_read(SHDW_OSD_BASE_ADDR);
+	u32 pitch = dispc_read(SHDW_OSD_PITCH) & 0xffff;
+	u32 sz    = dispc_read(SHDW_OSD_SIZE_XY);
+	u32 w = sz & 0xffff, h = (sz >> 16) & 0xffff;
+	void __iomem *p;
+	int n = 0, r, c;
+
+	if (!base || !w || !h || !pitch)
+		return snprintf(buf, PAGE_SIZE, "no scanout: base=%08x sz=%08x pitch=%u\n",
+				base, sz, pitch);
+
+	/* uncached on purpose: this must show what DISPC fetches, not what a CPU cache holds */
+	p = ioremap_nocache(base, pitch * h * 4);
+	if (!p)
+		return snprintf(buf, PAGE_SIZE, "ioremap %08x failed\n", base);
+
+	n += snprintf(buf + n, PAGE_SIZE - n, "base=%08x w=%u h=%u pitch=%u\n",
+		      base, w, h, pitch);
+	for (r = 0; r < 20; r++) {
+		for (c = 0; c < 16; c++) {
+			u32 px = readl(p + (((h * r) / 20) * pitch + (w * c) / 16) * 4);
+			n += snprintf(buf + n, PAGE_SIZE - n, "%06x ", px & 0xffffff);
+		}
+		n += snprintf(buf + n, PAGE_SIZE - n, "\n");
+	}
+	iounmap(p);
+	return n;
+}
+
+static DEVICE_ATTR(osd_thumb, S_IRUGO, sysfs_rd_osd_thumb, NULL);
+
+/* ---- /proc/dispc_osd : raw dump of whatever DISPC is scanning out right now ---- */
+struct osd_dump_ctx { void __iomem *p; size_t total; };
+
+static int dispc_osd_open(struct inode *inode, struct file *file)
+{
+	struct osd_dump_ctx *c;
+	u32 base  = dispc_read(SHDW_OSD_BASE_ADDR);
+	u32 pitch = dispc_read(SHDW_OSD_PITCH) & 0xffff;
+	u32 h     = (dispc_read(SHDW_OSD_SIZE_XY) >> 16) & 0xffff;
+
+	if (!base || !pitch || !h)
+		return -ENODEV;
+	c = kzalloc(sizeof(*c), GFP_KERNEL);
+	if (!c)
+		return -ENOMEM;
+	{
+		size_t frame = (size_t)pitch * h * 4;
+
+		/* start one frame below so the previous buffer is included; the caller can tell
+		 * the three frames apart because the dump is a whole number of frames */
+		if (base >= frame)
+			base -= frame;
+		c->total = frame * 3;
+	}
+	c->p = ioremap_nocache(base, c->total);
+	if (!c->p) {
+		kfree(c);
+		return -EIO;
+	}
+	file->private_data = c;
+	return 0;
+}
+
+static int dispc_osd_release(struct inode *inode, struct file *file)
+{
+	struct osd_dump_ctx *c = file->private_data;
+
+	if (c) {
+		if (c->p)
+			iounmap(c->p);
+		kfree(c);
+	}
+	return 0;
+}
+
+static ssize_t dispc_osd_read(struct file *file, char __user *ubuf,
+			      size_t len, loff_t *ppos)
+{
+	struct osd_dump_ctx *c = file->private_data;
+	size_t n;
+
+	if (!c || *ppos >= (loff_t)c->total)
+		return 0;
+	n = min(len, c->total - (size_t)*ppos);
+	if (copy_to_user(ubuf, (const void *)c->p + *ppos, n))
+		return -EFAULT;
+	*ppos += n;
+	return n;
+}
+
+static const struct file_operations dispc_osd_fops = {
+	.owner   = THIS_MODULE,
+	.open    = dispc_osd_open,
+	.read    = dispc_osd_read,
+	.release = dispc_osd_release,
+	.llseek  = default_llseek,
+};
+
 static struct attribute *sprdfb_fs_attrs[] = {
+	&dev_attr_osd_thumb.attr,
+	&dev_attr_dispc_dump.attr,
 	&dev_attr_dynamic_pclk.attr,
 	&dev_attr_dynamic_fps.attr,
 	&dev_attr_dynamic_mipi_clk.attr,
@@ -404,6 +566,7 @@ int sprdfb_create_sysfs(struct sprdfb_device *fb_dev)
 	}
 	attr = fb_dev->priv1;
 
+	proc_create("dispc_osd", 0444, NULL, &dispc_osd_fops);
 	rc = sysfs_create_group(&fb_dev->fb->dev->kobj, &sprdfb_attrs_group);
 	if (rc)
 		pr_err("sysfs group creation failed, rc=%d\n", rc);

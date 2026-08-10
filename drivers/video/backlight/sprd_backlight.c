@@ -201,7 +201,21 @@ static int sprd_bl_pwm_update_status(struct backlight_device *bldev)
 		led_level = bldev->props.brightness & PWM_MOD_MAX;
 		//led_level = (led_level * (PWM_DUTY_MAX+1) / (PWM_MOD_MAX+1)) + 10;
 #ifdef CONFIG_ONTIM_LCD_BACKLIGHT_BY_FLASH_DRV
-        sprd_backlight_set_val(led_level/43); //wanggang
+        /* A1000: HAL feeds 0..10, not 0..255 (измерено: 255->10, 128->10, 10->1),
+         * а деление на 43 рассчитано на 0..255 и всегда давало 0, из-за чего
+         * подсветка не управлялась вообще. Приводим оба диапазона к 0..15. */
+        {
+            u32 lvl;
+            if (led_level <= 15)
+                lvl = (led_level * 15 + 5) / 10;   /* 0..10 от HAL  -> 0..15 */
+            else
+                lvl = led_level * 15 / 255;        /* 0..255 напрямую -> 0..15 */
+            if (lvl > 15)
+                lvl = 15;
+            if (lvl == 0 && led_level > 0)
+                lvl = 1;                            /* не гасим на минимуме */
+            sprd_backlight_set_val(lvl);
+        }
 #else
 		led_level = led_level * 75 / 100;
 		//if(led_level < 8)
@@ -376,6 +390,37 @@ static void sprd_backlight_lateresume(struct early_suspend *h)
 	sprdbl.bldev->ops->update_status(sprdbl.bldev);
 	PRINT_INFO("late resume\n");
 }
+
+/* A1000: late_resume никогда не вызывается на Android 8.1 — система пишет в
+ * /sys/power/state только "mem" и не пишет обратно "on", а вся legacy-цепочка
+ * early_suspend приводится в движение именно оттуда. Из-за этого sprdbl.suspend
+ * залипал в 1, и после пробуждения sprd_bl_pwm_update_status() всегда уходил в
+ * ветку "disable": замерено state=0x0 power=0 brightness=200 sprdbl.suspend=1
+ * при полностью исправном DISPC. Даём sprdfb дёрнуть то же самое из ioctl
+ * SPRD_FB_SET_POWER_MODE — того пути, которым Android реально гасит и будит
+ * экран на этом железе. */
+void sprd_backlight_notify_power(int on)
+{
+	if (!sprdbl.bldev || !sprdbl.bldev->ops ||
+	    !sprdbl.bldev->ops->update_status)
+		return;
+
+	if (on) {
+		/* A1000: панель после переинициализации (ветка from_deep_sleep в
+		 * sprdfb_dispc_resume делает panel_init + reset) держит белое, пока
+		 * не придёт первый кадр. Если зажечь свет раньше — виден белый
+		 * экран. Ровно за этим вендорский late_resume и начинался с этого
+		 * вызова. Потолок ожидания ~370 мс: completion c таймаутом 300 мс
+		 * плюс msleep(70). */
+		wait_first_frame_complete();
+	}
+
+	set_ctl_pin_state(on);
+	sprdbl.suspend = on ? 0 : 1;
+	sprdbl.bldev->ops->update_status(sprdbl.bldev);
+	PRINT_INFO("notify_power(%d)\n", on);
+}
+EXPORT_SYMBOL(sprd_backlight_notify_power);
 #endif
 
 #ifdef CONFIG_OF

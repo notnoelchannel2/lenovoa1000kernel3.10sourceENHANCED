@@ -99,6 +99,9 @@ ONTIM_DEBUG_DECLARE_AND_INIT(sprdfb,sprdfb,8);
 
 static int sprdfb_check_var(struct fb_var_screeninfo *var, struct fb_info *fb);
 static int sprdfb_pan_display(struct fb_var_screeninfo *var, struct fb_info *fb);
+/* A1000: см. sprd_backlight_notify_power() в drivers/video/backlight/sprd_backlight.c */
+extern void sprd_backlight_notify_power(int on);
+
 static int sprdfb_ioctl(struct fb_info *info, unsigned int cmd,
 			unsigned long arg);
 #ifdef CONFIG_COMPAT
@@ -620,6 +623,34 @@ static int sprdfb_ioctl(struct fb_info *info, unsigned int cmd,
 	case SPRD_FB_SET_POWER_MODE:
 		result = copy_from_user(&power_mode, argp, sizeof(power_mode));
 		printk("sprdfb: [%s] : SPRD_FB_SET_POWER_MODE (%d)\n", __FUNCTION__, power_mode);
+		/* A1000: actually act on the requested power mode.
+		 * This used to only printk, so the panel was suspended solely by the
+		 * legacy early_suspend chain and never resumed at all (late_resume is
+		 * not part of the wake path on 8.1) -> pressing power left the panel
+		 * asleep with the backlight on, i.e. a white screen you cannot clear.
+		 * HWC modes: 0 OFF, 1 DOZE, 2 NORMAL, 3 DOZE_SUSPEND.
+		 * dev->enable guards against double work when the legacy chain also runs. */
+		/* A1000: already inside fb_ioctl, which holds info->lock — do NOT take
+		 * lock_fb_info() again here, that is a recursive mutex_lock and it
+		 * deadlocks the SurfaceFlinger thread (frames stop -> black screen,
+		 * and resume never reaches dev->enable = 1, after which pan_display
+		 * keeps answering "Invalid Device status 0"). */
+		if (0 == result) {
+			if ((0 == power_mode) || (3 == power_mode)) {
+				if (dev->enable) {
+					dev->ctrl->suspend(dev);
+				}
+				sprd_backlight_notify_power(0);
+			} else {
+				if (!dev->enable) {
+					dev->ctrl->resume(dev);
+				}
+				/* A1000: снять залипший sprdbl.suspend — без этого
+				 * подсветка после пробуждения остаётся выключенной,
+				 * хотя DISPC сканирует нормальный кадр. */
+				sprd_backlight_notify_power(1);
+			}
+		}
 		break;
 
 	default:

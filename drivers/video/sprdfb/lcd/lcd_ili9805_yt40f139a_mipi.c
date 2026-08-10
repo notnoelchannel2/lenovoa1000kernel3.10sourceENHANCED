@@ -410,7 +410,7 @@ struct panel_cfg lcd_ili9805_yt40f139a_mipi =
     .dev_id = SPRDFB_MAINLCD_ID,
     .lcd_id = 0x18,
     .lcd_name = "lcd_ili9805_yt40f139a_mipi",
-    .lcd_voltage_max = 1200,
+    .lcd_voltage_max = 1300,  /* uboot reports adc 1202-1204 on this unit */
     .lcd_voltage_min = 1100,
     .panel = &lcd_ili9805_yt40f139a_mipi_spec,
 };
