@@ -148,6 +148,17 @@ static int __ddr_training_memblock(void)
 void __init sci_reserve(void)
 {
 	int ret;
+
+	/* A1000: ram-console нужен и при CONFIG_OF.
+	 * Резервирование лежало внутри #ifndef CONFIG_OF, поэтому с device tree
+	 * область под журнал не выделялась и ramoops молчал. Без него ядро,
+	 * упавшее до инициализации консоли, не оставляет никаких следов —
+	 * а UART на этой плате не выведен. */
+#ifdef CONFIG_PSTORE_RAM
+	ret = __ramconsole_reserve_memblock();
+	if (ret != 0)
+		pr_err("Fail to reserve mem for ram_console. errno=%d\n", ret);
+#endif
 #if defined(CONFIG_ARCH_SCX30G) || defined(CONFIG_ARCH_SCX35L)
 	__ddr_training_memblock();
 #endif
@@ -167,11 +178,6 @@ void __init sci_reserve(void)
 		pr_err("Fail to reserve mem for sipc. errno=%d\n", ret);
 #endif
 
-#ifdef CONFIG_PSTORE_RAM
-	ret = __ramconsole_reserve_memblock();
-	if (ret != 0)
-		pr_err("Fail to reserve mem for ram_console. errno=%d\n", ret);
-#endif
 
 #ifdef CONFIG_FB_LCD_RESERVE_MEM
 	ret = __fbmem_reserve_memblock();

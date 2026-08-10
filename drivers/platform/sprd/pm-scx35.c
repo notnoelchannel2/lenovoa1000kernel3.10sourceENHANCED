@@ -1612,6 +1612,15 @@ static void sc8830_machine_restart(char mode, const char *cmd)
 
 	mdelay(1000);
 
+	/* A1000: watchdog промолчал — пробуем ещё раз с большей задержкой.
+	 * Программного сброса чипа у этой платформы нет, сброс делается только
+	 * сторожевым таймером, поэтому второй попытки — всё, что мы можем сделать
+	 * перед тем, как сдаться. */
+	printk("A1000: watchdog не сбросил, пробую ещё раз\n");
+	sprd_turnon_watchdog(200);
+	mdelay(1000);
+
+
 	printk("reboot failed!\n");
 
 	while (1);
@@ -1624,6 +1633,13 @@ void __init sc_pm_init(void)
 	pm_power_off   = sc8830_power_off;
 	arm_pm_restart = sc8830_machine_restart;
 	pr_info("power off %pf, restart %pf\n", pm_power_off, arm_pm_restart);
+	/* A1000: возвращаем аппаратный сброс по удержанию кнопки питания.
+	 * Бит BIT_PBINT_7S_RST_DISABLE стоял установленным (POR7S = 0x04fc), и
+	 * выйти из зависания можно было только вынув батарею. Ядро этот бит само
+	 * не трогает: блок в sc_keypad.c собирается только при
+	 * CONFIG_KEYBOARD_SYSDUMP_BYPASS, которого у нас нет. */
+	sprd_pbint_7s_reset_enable();
+
 	init_gr();
 	setup_autopd_mode();
 	pm_ana_ldo_config();
