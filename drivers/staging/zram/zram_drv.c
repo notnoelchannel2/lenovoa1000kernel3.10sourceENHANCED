@@ -37,15 +37,43 @@
 
 #define LZO_ALGO_SW  0
 #define LZO_ALGO_HW  1
+#define LZ4_ALGO_SW  2
 
+/* A1000: LZ4 вместо LZO.
+ *
+ * Подмена выходит в три строки: сигнатуры lz4_compress() и
+ * lz4_decompress_unknownoutputsize() СОВПАДАЮТ с lzo1x_1_compress() и
+ * lzo1x_decompress_safe() до последнего аргумента, и обе возвращают 0 на
+ * успехе (LZO_E_OK тоже 0), поэтому проверки ошибок ниже трогать не надо.
+ *
+ * Зачем: страницу достают из zram на ГОРЯЧЕМ пути обращения к памяти, и
+ * там важна скорость распаковки, а не последний процент сжатия. LZ4
+ * распаковывает в разы быстрее LZO, сжимает тоже быстрее — процессор
+ * меньше времени проводит на высокой частоте.
+ *
+ * lib/lz4 в ядре 3.10 нет, взят из порта 3.14 (kupd/port314) — это тот же
+ * апстримный код. Аппаратный путь LZO (CONFIG_LZO_HW_ALGO) имеет приоритет:
+ * если его когда-нибудь включат, LZ4 отступает.
+ *
+ * Что выбрано на живом ядре, видно так:
+ *   cat /sys/module/zram/parameters/lzo_algo_type   (0 = LZO, 1 = LZO HW, 2 = LZ4)
+ */
 #ifdef CONFIG_LZO_HW_ALGO
 #define  zram_compress           lzo1x_1_compress_hw
 #define  zram_decompress_safe    lzo1x_decompress_safe_hw
+#define  ZRAM_WORKMEM_SIZE       LZO1X_MEM_COMPRESS
 static uint lzo_algo_type = LZO_ALGO_HW;
 bool lzo_sw_flag;
+#elif defined(CONFIG_ZRAM_LZ4)
+#include <linux/lz4.h>
+#define  zram_compress           lz4_compress
+#define  zram_decompress_safe    lz4_decompress_unknownoutputsize
+#define  ZRAM_WORKMEM_SIZE       LZ4_MEM_COMPRESS
+static uint lzo_algo_type = LZ4_ALGO_SW;
 #else
 #define  zram_compress           lzo1x_1_compress
 #define  zram_decompress_safe    lzo1x_decompress_safe
+#define  ZRAM_WORKMEM_SIZE       LZO1X_MEM_COMPRESS
 static uint lzo_algo_type = LZO_ALGO_SW;
 #endif
 
@@ -543,7 +571,7 @@ struct zram_meta *zram_meta_alloc(u64 disksize)
 	if (!meta)
 		goto out;
 
-	meta->compress_workmem = kzalloc(LZO1X_MEM_COMPRESS, GFP_KERNEL);
+	meta->compress_workmem = kzalloc(ZRAM_WORKMEM_SIZE, GFP_KERNEL);
 	if (!meta->compress_workmem)
 		goto free_meta;
 

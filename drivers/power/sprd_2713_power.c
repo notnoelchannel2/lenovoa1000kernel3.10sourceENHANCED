@@ -210,6 +210,17 @@ static int sprdbat_battery_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		val->intval = data->bat_info.vbat_vol * 1000;
 		break;
+	/* A1000: ток заряда. Драйвер отдавал его ТОЛЬКО через свой sysfs-файл
+	 * real_time_current, а Android (healthd -> BatteryProperties) читает
+	 * стандартный current_now, которого тут не было вовсе. Отсюда вечный
+	 * «0.02 A» в интерфейсе при реальных 205 мА. Значение в мА, наружу
+	 * положено отдавать микроамперы. */
+	case POWER_SUPPLY_PROP_CURRENT_NOW:
+		if (data->bat_info.module_state == POWER_SUPPLY_STATUS_CHARGING)
+			val->intval = sprdchg_read_chg_current() * 1000;
+		else
+			val->intval = 0;
+		break;
 	case POWER_SUPPLY_PROP_TEMP:
 		val->intval = data->bat_info.cur_temp;
 		break;
@@ -221,6 +232,21 @@ static int sprdbat_battery_get_property(struct power_supply *psy,
 	return ret;
 }
 
+/* A1000: CDP — это тоже «настоящая» зарядка, а не USB-порт компьютера.
+ *
+ * Три места ниже сравнивали тип строго с DCP, и порт с зарядкой (CDP, 1.5 А по
+ * спецификации BC1.2) попадал в usb_online. Ток драйвер при этом выставлял
+ * ВЕРНО — sprdbat_start_charge() отдельно разбирает CDP и берёт adp_cdp_cur, —
+ * врало только отнесение: в интерфейсе «зарядка по USB», и всё, что смотрит на
+ * ac_online, считало питание слабым.
+ *
+ * Значения типов (sprd_battery.h): UNKNOW 0, CDP 1, DCP 2, SDP 4.
+ */
+static inline int sprdbat_adp_is_ac(uint32_t adp_type)
+{
+	return (adp_type == ADP_TYPE_DCP) || (adp_type == ADP_TYPE_CDP);
+}
+
 static enum power_supply_property sprdbat_battery_props[] = {
 	POWER_SUPPLY_PROP_STATUS,
 	POWER_SUPPLY_PROP_HEALTH,
@@ -228,6 +254,7 @@ static enum power_supply_property sprdbat_battery_props[] = {
 	POWER_SUPPLY_PROP_TECHNOLOGY,
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
+	POWER_SUPPLY_PROP_CURRENT_NOW,
 	POWER_SUPPLY_PROP_TEMP,
 };
 
@@ -778,7 +805,7 @@ static int plugin_callback(int usb_cable, void *data)
 			  SPRDBAT_PLUG_WAKELOCK_TIME_SEC * HZ);
 
 	sprdbat_data->bat_info.adp_type = sprdchg_charger_is_adapter();
-	if (sprdbat_data->bat_info.adp_type == ADP_TYPE_DCP) {
+	if (sprdbat_adp_is_ac(sprdbat_data->bat_info.adp_type)) {
 		sprdbat_data->bat_info.ac_online = 1;
 	} else {
 		sprdbat_data->bat_info.usb_online = 1;
@@ -807,7 +834,7 @@ static int plugin_callback(int usb_cable, void *data)
 	SPRDBAT_DEBUG("plugin_callback:sprdbat_data->bat_info.adp_type:%d\n",
 		      sprdbat_data->bat_info.adp_type);
 
-	if (sprdbat_data->bat_info.adp_type == ADP_TYPE_DCP)
+	if (sprdbat_adp_is_ac(sprdbat_data->bat_info.adp_type))
 		power_supply_changed(&sprdbat_data->ac);
 	else
 		power_supply_changed(&sprdbat_data->usb);
@@ -848,7 +875,7 @@ static int plugout_callback(int usb_cable, void *data)
 #endif
 	mutex_unlock(&sprdbat_data->lock);
 
-	if (adp_type == ADP_TYPE_DCP)
+	if (sprdbat_adp_is_ac(adp_type))
 		power_supply_changed(&sprdbat_data->ac);
 	else
 		power_supply_changed(&sprdbat_data->usb);

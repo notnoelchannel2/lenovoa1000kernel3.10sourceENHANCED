@@ -99,8 +99,8 @@ static void _DrvPlatformLyrFingerTouchDoWork(struct work_struct *pWork)
     DrvFwCtrlHandleFingerTouch();
 
 #if defined(CONFIG_TOUCH_DRIVER_RUN_ON_SPRD_PLATFORM) || defined(CONFIG_TOUCH_DRIVER_RUN_ON_QCOM_PLATFORM)
-//    enable_irq(MS_TS_MSG_IC_GPIO_INT);
-    enable_irq(msg2xxx_info->irq);
+    /* A1000: снимать маску вручную больше не нужно, это делает IRQF_ONESHOT,
+     * см. DrvPlatformLyrRegisterInterruptHandler(). */
 #elif defined(CONFIG_TOUCH_DRIVER_RUN_ON_MTK_PLATFORM)
     mt_eint_unmask(CUST_EINT_TOUCH_PANEL_NUM); 
 #endif
@@ -134,9 +134,24 @@ static void _DrvPlatformLyrPSDoWork(struct work_struct *pWork)
 #if defined(CONFIG_TOUCH_DRIVER_RUN_ON_SPRD_PLATFORM) || defined(CONFIG_TOUCH_DRIVER_RUN_ON_QCOM_PLATFORM)
 /* The interrupt service routine will be triggered when interrupt occurred */
 static irqreturn_t _DrvPlatformLyrFingerTouchInterruptHandler(s32 nIrq, void *pDeviceId)
-{    
-    disable_irq_nosync(msg2xxx_info->irq);
-    schedule_work(&msg2xxx_info->work);
+{
+    /* A1000: НИТЕВОЙ обработчик, а не верхняя половина.
+     *
+     * Было: маскируем прерывание и кидаем работу в ОБЩУЮ очередь system_wq,
+     * а маску снимает уже сама работа. То есть всё время ожидания kworker
+     * прерывание тача выключено. При прокрутке kworker занят (ext4, ION,
+     * GPU), и импульсы, пришедшие в это окно, теряются НАСОВСЕМ: линия
+     * фронтовая, замаскированный фронт не защёлкивается.
+     *
+     * Замерено на живом пальце: контроллер тикает ровно 11.6 мс (86 Гц), но
+     * 15 % промежутков это 41-45 мс, то есть РОВНО три пропущенных отчёта
+     * подряд, промежуточных значений почти нет. Значит дело не в шуме шины,
+     * а в окне ожидания очереди. Для приложения это палец, который замирает
+     * на 2-3 кадра и потом прыгает: та самая мелкая дрожь при ровных кадрах.
+     *
+     * Стало: своя нить irq/N-msg2xxx (SCHED_FIFO 50), маску держит
+     * IRQF_ONESHOT. Нить не стоит в общей очереди за чужой работой. */
+    _DrvPlatformLyrFingerTouchDoWork(NULL);
     return IRQ_HANDLED;
 }
 #endif
@@ -549,8 +564,12 @@ s32 DrvPlatformLyrRegisterInterruptHandler(void)
         
         msg2xxx_info->irq = msg2xxx_info->i2c->irq;
         /* request an irq and register the isr */
-        nRetVal = request_irq(msg2xxx_info->irq, _DrvPlatformLyrFingerTouchInterruptHandler,
-                      IRQF_TRIGGER_RISING /* | IRQF_NO_SUSPEND *//* IRQF_TRIGGER_FALLING */,
+        /* A1000: верхняя половина не нужна вовсе, обработчик нитевой, а
+         * IRQF_ONESHOT держит маску ровно до его возврата. Подробности в
+         * _DrvPlatformLyrFingerTouchInterruptHandler(). */
+        nRetVal = request_threaded_irq(msg2xxx_info->irq, NULL,
+                      _DrvPlatformLyrFingerTouchInterruptHandler,
+                      IRQF_TRIGGER_RISING | IRQF_ONESHOT /* | IRQF_NO_SUSPEND */,
                       "msg2xxx", NULL);
         if (nRetVal != 0)
         {

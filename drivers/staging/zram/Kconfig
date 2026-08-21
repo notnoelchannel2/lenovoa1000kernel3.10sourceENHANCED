@@ -16,6 +16,19 @@ config ZRAM
 	  See zram.txt for more information.
 	  Project home: <https://compcache.googlecode.com/>
 
+config ZRAM_LZ4
+	bool "Use LZ4 instead of LZO for zram"
+	depends on ZRAM
+	select LZ4_COMPRESS
+	select LZ4_DECOMPRESS
+	default y
+	help
+	  A1000: LZ4 распаковывает в разы быстрее LZO при чуть худшем сжатии.
+	  Для свопа в память важна именно скорость чтения: страницу достают из
+	  zram на горячем пути обращения к памяти, и там дорога каждая
+	  микросекунда. Сжимает LZ4 тоже быстрее, то есть процессор меньше
+	  времени проводит на высокой частоте.
+
 config ZRAM_DEBUG
 	bool "Compressed RAM block device debug support"
 	depends on ZRAM

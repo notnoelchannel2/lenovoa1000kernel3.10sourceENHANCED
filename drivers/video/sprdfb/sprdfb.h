@@ -211,6 +211,8 @@ struct display_ctrl {
 #ifdef  CONFIG_FB_LCD_OVERLAY_SUPPORT
 	int32_t 	(*enable_overlay) 	(struct sprdfb_device *dev, struct overlay_info* info, int enable);
 	int32_t	(*display_overlay)	(struct sprdfb_device *dev, struct overlay_display* setting);
+	/* A1000: см. SPRD_FB_PAGEFLIP */
+	int32_t	(*pageflip)		(struct sprdfb_device *dev, uint32_t phys);
 #endif
 
 #ifdef CONFIG_FB_VSYNC_SUPPORT

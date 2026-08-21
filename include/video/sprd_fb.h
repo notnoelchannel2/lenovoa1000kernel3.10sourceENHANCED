@@ -84,4 +84,8 @@ int sprdfb_IOdeinit(void);
 #define SPRD_FB_CHANGE_FPS _IOW(SPRD_FB_IOCTL_MAGIC, 3, unsigned int)
 #define SPRD_FB_IS_REFRESH_DONE _IOW(SPRD_FB_IOCTL_MAGIC, 4, unsigned int)
 #define SPRD_FB_SET_POWER_MODE _IOW(SPRD_FB_IOCTL_MAGIC, 5, unsigned int)
+/* A1000: сменить ТОЛЬКО адрес сканирования OSD и дождаться защёлкивания.
+ * Аргумент — физический адрес буфера (uint32_t). Подробности в
+ * sprdfb_dispc_pageflip(). */
+#define SPRD_FB_PAGEFLIP _IOW(SPRD_FB_IOCTL_MAGIC, 20, unsigned int)
 #endif

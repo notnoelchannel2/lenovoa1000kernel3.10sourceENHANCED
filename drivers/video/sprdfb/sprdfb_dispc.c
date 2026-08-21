@@ -169,7 +169,7 @@ static int osd_endian_ov = -1;
  * При -1 до применения /system/etc/init/a1000_rbswitch.rc действует
  * значение от блоба hwcomposer с перестановкой красного и синего,
  * поэтому бут-анимация в первые секунды мерцала фиолетовым. */
-static int osd_rb_ov = 0;
+static int osd_rb_ov = 0;	/* A1000: 0. Проверено глазом 21.08.2026 на пути sprdfb_dispc_pageflip(): цвет верный именно при 0. На прежнем пути (SET_OVERLAY на каждый кадр) верной была 1 — там overlay_osd_configure() переписывал DISPC_OSD_CTRL целиком. Значение слушается вживую: echo 0|1 > /sys/module/sprdfb_dispc/parameters/osd_rb_ov, -1 = не трогать регистр. */
 static int osd_fmt_ov = -1;
 static int osd_extra16 = -1;
 module_param(osd_endian_ov, int, 0644);
@@ -1909,6 +1909,77 @@ ERROR_ENABLE_OVERLAY:
 }
 
 
+/* A1000: минимальный page flip — меняем ровно один регистр.
+ *
+ * ЗАЧЕМ ОТДЕЛЬНЫЙ ПУТЬ. Чтобы показать новый кадр, «ноль копирования» гонял
+ * на КАЖДЫЙ кадр пару SET_OVERLAY + DISPLAY_OVERLAY. Это заново открывает и
+ * настраивает слой, а sprdfb_dispc_display_overlay вдобавок ГАСИТ слой OSD
+ * (dispc_clear_bits(BIT(0), DISPC_OSD_CTRL)) и включает его обратно уже
+ * внутри overlay_start(). Между этими записями идёт живая развёртка — отсюда
+ * рвань на движущейся картинке.
+ *
+ * Здесь мы пишем только DISPC_OSD_BASE_ADDR, взводим обновление и ждём, пока
+ * оно защёлкнется. Возврат из ioctl означает: DISPC уже выдаёт НОВЫЙ буфер,
+ * предыдущий свободен и его можно перерисовывать. Это и есть честный page
+ * flip, ради которого всё затевалось.
+ *
+ * Слой должен быть УЖЕ настроен обычным SET_OVERLAY — размер, формат и
+ * rb_switch мы не трогаем, они от кадра к кадру не меняются. */
+static int32_t sprdfb_dispc_pageflip(struct sprdfb_device *dev, uint32_t phys)
+{
+	int32_t ret = 0;
+
+	if (0 == phys) {
+		return -EINVAL;
+	}
+
+	down(&dev->refresh_lock);
+
+	if (0 == dev->enable) {
+		/* панель погашена — вызывающий откатится на обычный путь */
+		ret = -EPERM;
+		goto out;
+	}
+	if ((SPRD_OVERLAY_STATUS_STARTED != dispc_ctx.overlay_state) &&
+	    (SPRD_OVERLAY_STATUS_ON != dispc_ctx.overlay_state)) {
+		/* слой ещё не настроен: нужен хотя бы один SET_OVERLAY */
+		ret = -EAGAIN;
+		goto out;
+	}
+
+	/* A1000: короткий путь не проходит через overlay_osd_configure(), где
+	 * ставился бит 15 DISPC_OSD_CTRL — перестановка красного и синего.
+	 * Без него картинка желтеет. Подтверждаем бит на каждом перевороте:
+	 * это одна запись в тот же защёлкиваемый регистр, лишней рвани нет.
+	 * Заодно osd_rb_ov снова слушается ВЖИВУЮ, как на длинном пути:
+	 *   echo 0 > /sys/module/sprdfb_dispc/parameters/osd_rb_ov
+	 * (-1 = не трогать регистр вовсе). */
+	if (osd_rb_ov >= 0) {
+		uint32_t ctrl = dispc_read(DISPC_OSD_CTRL);
+		uint32_t want = osd_rb_ov ? (ctrl | (1 << 15)) : (ctrl & ~(1 << 15));
+		if (want != ctrl) {
+			dispc_write(want, DISPC_OSD_CTRL);
+		}
+	}
+
+	dispc_write(phys, DISPC_OSD_BASE_ADDR);
+	dev->frame_count += 1;
+
+	/* взводит обновление регистров (BIT(5) DISPC_DPI_CTRL); для DPI само
+	 * ничего не ждёт — ожиданием занимаемся мы */
+	dispc_run(dev);
+
+	if (!dispc_ctx.is_first_frame) {
+		if (0 != dispc_sync(dev)) {
+			ret = -ETIMEDOUT;
+		}
+	}
+
+out:
+	up(&dev->refresh_lock);
+	return ret;
+}
+
 static int32_t sprdfb_dispc_display_overlay(struct sprdfb_device *dev, struct overlay_display* setting)
 {
 #ifndef CONFIG_FB_LOW_RES_SIMU
@@ -2498,6 +2569,7 @@ struct display_ctrl sprdfb_dispc_ctrl = {
 #ifdef CONFIG_FB_LCD_OVERLAY_SUPPORT
 	.enable_overlay = sprdfb_dispc_enable_overlay,
 	.display_overlay = sprdfb_dispc_display_overlay,
+	.pageflip = sprdfb_dispc_pageflip,
 #endif
 #ifdef CONFIG_FB_VSYNC_SUPPORT
 	.wait_for_vsync = spdfb_dispc_wait_for_vsync,

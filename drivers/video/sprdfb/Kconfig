@@ -289,6 +289,11 @@ config FB_LCD_HX8379C_HSD040F8W9_MIPI
 	depends on FB_SC8825 || FB_SCX35 || FB_SCX30G
 	default n	
 
+config FB_LCD_ILI9806E_HOLIT_MIPI
+	boolean "support ili9806e holit mipi panel (second A1000 revision)"
+	depends on FB_SC8825 || FB_SCX35 || FB_SCX30G
+	default n
+
 config FB_LCD_ILI9805_YT40F139A_MIPI
 	boolean "support ili9805_yt40f139a mipi panel"
 	depends on FB_SC8825 || FB_SCX35 || FB_SCX30G

@@ -581,6 +581,20 @@ static int sprdfb_ioctl(struct fb_info *info, unsigned int cmd,
 			result = dev->ctrl->display_overlay(dev, &local_overlay_display);
 		}
 		break;
+	/* A1000: см. sprdfb_dispc_pageflip() */
+	case SPRD_FB_PAGEFLIP:
+		{
+			uint32_t phys = 0;
+			if (copy_from_user(&phys, argp, sizeof(phys))){
+				return -EFAULT;
+			}
+			if(NULL != dev->ctrl->pageflip){
+				result = dev->ctrl->pageflip(dev, phys);
+			} else {
+				result = -ENOTTY;
+			}
+		}
+		break;
 #endif
 #ifdef CONFIG_FB_VSYNC_SUPPORT
 	case FBIO_WAITFORVSYNC:

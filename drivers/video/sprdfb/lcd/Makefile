@@ -37,6 +37,7 @@ obj-$(CONFIG_FB_LCD_SH1282G_JSJ800_MIPI)     += lcd_sh1282g_jsj800_mipi.o
 obj-$(CONFIG_FB_LCD_OTM8019A_YC3979_MIPI)    += lcd_otm8019a_yc3979_mipi.o
 obj-$(CONFIG_FB_LCD_HX8379C_HSD040F8W9_MIPI) += lcd_hx8379c_hsd40f8w9_mipi.o
 obj-$(CONFIG_FB_LCD_ILI9805_YT40F139A_MIPI)  += lcd_ili9805_yt40f139a_mipi.o
+obj-$(CONFIG_FB_LCD_ILI9806E_HOLIT_MIPI)  += lcd_ili9806e_holit_mipi.o
 obj-$(CONFIG_FB_LCD_NT35512S_FL040WV200_MIPI)    += lcd_nt35512s_fl040wv200_mipi.o
 obj-$(CONFIG_FB_LCD_SH1282G_JSJ854_MIPI)     += lcd_sh1282g_jsj854_mipi.o
 obj-$(CONFIG_FB_LCD_HF9161B_HS1911_MIPI)     += lcd_hf9161b_hs1911_mipi.o
