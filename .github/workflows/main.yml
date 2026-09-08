@@ -5,11 +5,11 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
 
     steps:
     - name: Checkout Kernel Source
-      uses: actions/checkout@v2
+      uses: actions/checkout@v7
 
     - name: Getting Toolchain
       run: |
@@ -17,14 +17,14 @@ jobs:
         sudo git clone --depth 1 --branch android-5.1.1_r15 --single-branch https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8 /opt/toolchains/arm-eabi-4.8/
     - name: Building Kernel
       run: |
-        make -j2 sp7731gea_2341a-dt_defconfig MACH_BOARD=sprd-scx35_sp7731gea_2341A
-        make -j64
+        make -j2 recovery_a1000_defconfig
+        make -j$(nproc --all)
     - name: Moving Output # CI only
       run: |
         mkdir -p /home/runner/work/output
         cp arch/arm/boot/Image /home/runner/work/output/zImage
     - name: Uploading Output
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v7
       with:
         name: zImage
         path: /home/runner/work/output/zImage
