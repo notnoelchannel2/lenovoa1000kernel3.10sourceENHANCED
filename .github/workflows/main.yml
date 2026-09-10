@@ -17,7 +17,7 @@ jobs:
         sudo git clone --depth 1 --branch android-5.1.1_r15 --single-branch https://android.googlesource.com/platform/prebuilts/gcc/linux-x86/arm/arm-eabi-4.8 /opt/toolchains/arm-eabi-4.8/
     - name: Building Kernel
       run: |
-        make -j2 recovery_a1000_defconfig
+        make -j2 a1000_baton4iks_defconfig
         make -j$(nproc --all)
     - name: Moving Output # CI only
       run: |
