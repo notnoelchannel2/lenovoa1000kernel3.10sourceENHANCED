@@ -73,7 +73,7 @@ struct snd_timer_user {
 	struct timespec tstamp;		/* trigger tstamp */
 	wait_queue_head_t qchange_sleep;
 	struct fasync_struct *fasync;
-	struct mutex tread_sem;
+	struct mutex ioctl_lock;
 };
 
 /* list of timers */
@@ -1270,7 +1270,7 @@ static int snd_timer_user_open(struct inode *inode, struct file *file)
 		return -ENOMEM;
 	spin_lock_init(&tu->qlock);
 	init_waitqueue_head(&tu->qchange_sleep);
-	mutex_init(&tu->tread_sem);
+	mutex_init(&tu->ioctl_lock);
 	tu->ticks = 1;
 	tu->queue_size = 128;
 	tu->queue = kmalloc(tu->queue_size * sizeof(struct snd_timer_read),
@@ -1290,8 +1290,10 @@ static int snd_timer_user_release(struct inode *inode, struct file *file)
 	if (file->private_data) {
 		tu = file->private_data;
 		file->private_data = NULL;
+			mutex_lock(&tu->ioctl_lock);
 		if (tu->timeri)
 			snd_timer_close(tu->timeri);
+			mutex_unlock(&tu->ioctl_lock);
 		kfree(tu->queue);
 		kfree(tu->tqueue);
 		kfree(tu);
@@ -1529,7 +1531,6 @@ static int snd_timer_user_tselect(struct file *file,
 	int err = 0;
 
 	tu = file->private_data;
-	mutex_lock(&tu->tread_sem);
 	if (tu->timeri) {
 		snd_timer_close(tu->timeri);
 		tu->timeri = NULL;
@@ -1571,9 +1572,6 @@ static int snd_timer_user_tselect(struct file *file,
 		tu->timeri->ccallback = snd_timer_user_ccallback;
 		tu->timeri->callback_data = (void *)tu;
 	}
-
-      __err:
-      	mutex_unlock(&tu->tread_sem);
 	return err;
 }
 
@@ -1804,17 +1802,17 @@ static long snd_timer_user_ioctl(struct file *file, unsigned int cmd,
 	{
 		int xarg;
 
-		mutex_lock(&tu->tread_sem);
+		mutex_lock(&tu->ioctl_lock);
 		if (tu->timeri)	{	/* too late */
-			mutex_unlock(&tu->tread_sem);
+			mutex_unlock(&tu->ioctl_lock);
 			return -EBUSY;
 		}
 		if (get_user(xarg, p)) {
-			mutex_unlock(&tu->tread_sem);
+			mutex_unlock(&tu->ioctl_lock);
 			return -EFAULT;
 		}
 		tu->tread = xarg ? 1 : 0;
-		mutex_unlock(&tu->tread_sem);
+		mutex_unlock(&tu->ioctl_lock);
 		return 0;
 	}
 	case SNDRV_TIMER_IOCTL_GINFO:
