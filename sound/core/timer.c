@@ -1572,6 +1572,7 @@ static int snd_timer_user_tselect(struct file *file,
 		tu->timeri->ccallback = snd_timer_user_ccallback;
 		tu->timeri->callback_data = (void *)tu;
 	}
+       __err:
 	return err;
 }
 
